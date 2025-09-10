@@ -660,18 +660,85 @@ class MusicQueue {
                                     }
                                 }
                                 
-                                if (directUrl && typeof directUrl === 'string') {
-                                    // Use the direct URL with play-dl
+                                // Method 4: Try direct streaming if all else fails
+                                if (!directUrl) {
                                     try {
+                                        console.log('DEBUG: Trying youtube-dl-exec direct stream approach');
+                                        
+                                        // Use youtube-dl-exec to create a direct stream
+                                        const { spawn } = require('child_process');
+                                        const ytdlProcess = spawn('youtube-dl', [
+                                            '-f', 'bestaudio[ext=webm]/bestaudio/best',
+                                            '--no-playlist',
+                                            '--no-warnings',
+                                            '--no-call-home',
+                                            '--no-check-certificate',
+                                            '--prefer-free-formats',
+                                            '--youtube-skip-dash-manifest',
+                                            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                                            '-o', '-',
+                                            song.url
+                                        ]);
+                                        
+                                        if (ytdlProcess.stdout) {
+                                            stream = ytdlProcess.stdout;
+                                            streamSuccess = true;
+                                            console.log('DEBUG: PlaySong youtube-dl-exec direct stream successful');
+                                            directUrl = 'direct_stream'; // Skip the URL processing
+                                        } else {
+                                            throw new Error('No stdout from youtube-dl process');
+                                        }
+                                        
+                                    } catch (directError) {
+                                        console.log('DEBUG: youtube-dl-exec direct stream failed:', directError.message);
+                                    }
+                                }
+                                
+                                // Only process URL if we haven't already created a direct stream
+                                if (directUrl && directUrl !== 'direct_stream' && typeof directUrl === 'string') {
+                                    // Try to use the direct URL with different approaches
+                                    try {
+                                        // First try with play-dl
                                         stream = await playdl.stream(directUrl, { 
                                             quality: 2,
                                             discordPlayerCompatibility: true 
                                         });
                                         streamSuccess = true;
-                                        console.log('DEBUG: PlaySong youtube-dl-exec fallback successful');
-                                    } catch (streamError) {
-                                        console.log('DEBUG: play-dl stream with direct URL failed:', streamError.message);
-                                        throw streamError;
+                                        console.log('DEBUG: PlaySong youtube-dl-exec fallback successful with play-dl');
+                                    } catch (playdlError) {
+                                        console.log('DEBUG: play-dl stream failed, trying ytdl-core with direct URL:', playdlError.message);
+                                        
+                                        try {
+                                            // Try ytdl-core with the direct URL
+                                            const ytdlStream = ytdl(directUrl, {
+                                                filter: 'audioonly',
+                                                quality: 'highestaudio',
+                                                highWaterMark: 1 << 25,
+                                                dlChunkSize: 0,
+                                                requestOptions: {
+                                                    headers: {
+                                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                                                    }
+                                                }
+                                            });
+                                            
+                                            // Add error handler for signature extraction
+                                            ytdlStream.on('error', (error) => {
+                                                if (error.message.includes('Could not extract functions')) {
+                                                    console.log('DEBUG: Suppressing ytdl-core signature error for direct URL');
+                                                } else {
+                                                    console.error('ytdl-core direct URL stream error:', error);
+                                                }
+                                            });
+                                            
+                                            stream = ytdlStream;
+                                            streamSuccess = true;
+                                            console.log('DEBUG: PlaySong youtube-dl-exec fallback successful with ytdl-core');
+                                            
+                                        } catch (ytdlError) {
+                                            console.log('DEBUG: ytdl-core with direct URL failed:', ytdlError.message);
+                                            throw ytdlError;
+                                        }
                                     }
                                 } else {
                                     throw new Error('No direct URL returned from youtube-dl-exec');
