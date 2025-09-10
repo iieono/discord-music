@@ -3,7 +3,6 @@ const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerSta
 const playdl = require('play-dl');
 const ytdl = require('ytdl-core');
 const youtubedl = require('youtube-dl-exec');
-const YtdlpWrap = require('yt-dlp-wrap').default;
 const { getPreview } = require('spotify-url-info');
 const fs = require('fs');
 const config = require('./config.json');
@@ -301,38 +300,16 @@ class MusicQueue {
                     } catch (streamError) {
                         console.log('DEBUG: Pre-buffer direct stream failed, trying fallback:', streamError.message);
                         
-                        // Try yt-dlp-wrap as fallback
+                        // Try enhanced youtube-dl-exec as fallback
                         try {
-                            console.log('DEBUG: Pre-buffer trying yt-dlp-wrap fallback');
+                            console.log('DEBUG: Pre-buffer trying youtube-dl-exec fallback');
                             
-                            const ytdlp = new YtdlpWrap();
-                            const audioStream = await ytdlp.execStream([
-                                song.url,
-                                '--format', 'bestaudio[ext=webm]/bestaudio/best',
-                                '--no-playlist',
-                                '--no-warnings',
-                                '--no-call-home',
-                                '--no-check-certificate',
-                                '--prefer-free-formats',
-                                '--youtube-skip-dash-manifest',
-                                '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                            ]);
+                            // Try different approaches with youtube-dl-exec
+                            let directUrl = null;
                             
-                            if (audioStream) {
-                                stream = audioStream;
-                                console.log('DEBUG: Pre-buffer yt-dlp-wrap fallback successful');
-                            } else {
-                                throw new Error('No stream returned from yt-dlp-wrap');
-                            }
-                            
-                        } catch (ytdlpError) {
-                            console.log('DEBUG: Pre-buffer yt-dlp-wrap fallback failed:', ytdlpError.message);
-                            
-                            // Try youtube-dl-exec as next fallback
+                            // Method 1: Get direct URL
                             try {
-                                console.log('DEBUG: Pre-buffer trying youtube-dl-exec fallback');
-                                
-                                const result = await youtubedl(song.url, {
+                                directUrl = await youtubedl(song.url, {
                                     format: 'bestaudio[ext=webm]/bestaudio/best',
                                     getUrl: true,
                                     noWarnings: true,
@@ -342,47 +319,69 @@ class MusicQueue {
                                     youtubeSkipDashManifest: true,
                                     referer: song.url
                                 });
-                                
-                                if (result && typeof result === 'string') {
-                                    stream = await playdl.stream(result, { quality: 2 });
-                                    console.log('DEBUG: Pre-buffer youtube-dl-exec fallback successful');
-                                } else {
-                                    throw new Error('No direct URL returned from youtube-dl-exec');
-                                }
-                                
-                            } catch (execError) {
-                                console.log('DEBUG: Pre-buffer youtube-dl-exec fallback failed:', execError.message);
-                                
-                                // Last resort: try ytdl-core with error suppression
+                            } catch (urlError) {
+                                console.log('DEBUG: Pre-buffer youtube-dl-exec direct URL failed:', urlError.message);
+                            }
+                            
+                            // Method 2: Try different format if first fails
+                            if (!directUrl) {
                                 try {
-                                    console.log('DEBUG: Pre-buffer trying ytdl-core as last resort');
-                                    
-                                    const ytdlStream = ytdl(song.url, {
-                                        filter: 'audioonly',
-                                        quality: 'highestaudio',
-                                        highWaterMark: 1 << 25,
-                                        dlChunkSize: 0,
-                                        requestOptions: {
-                                            headers: {
-                                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                                            }
-                                        }
+                                    directUrl = await youtubedl(song.url, {
+                                        format: 'bestaudio/best',
+                                        getUrl: true,
+                                        noWarnings: true,
+                                        noCallHome: true,
+                                        noCheckCertificate: true
                                     });
-                                    
-                                    // Add error handler to suppress signature extraction errors
-                                    ytdlStream.on('error', (error) => {
-                                        if (error.message.includes('Could not extract functions')) {
-                                            console.log('DEBUG: Pre-buffer suppressing ytdl-core signature error');
-                                        }
-                                    });
-                                    
-                                    stream = ytdlStream;
-                                    console.log('DEBUG: Pre-buffer ytdl-core last resort successful');
-                                    
-                                } catch (finalError) {
-                                    console.log('DEBUG: Pre-buffer all methods failed:', finalError.message);
-                                    return; // Skip pre-buffering if all methods fail
+                                } catch (altError) {
+                                    console.log('DEBUG: Pre-buffer youtube-dl-exec alternative format failed:', altError.message);
                                 }
+                            }
+                            
+                            if (directUrl && typeof directUrl === 'string') {
+                                try {
+                                    stream = await playdl.stream(directUrl, { quality: 2 });
+                                    console.log('DEBUG: Pre-buffer youtube-dl-exec fallback successful');
+                                } catch (streamError) {
+                                    console.log('DEBUG: Pre-buffer play-dl stream with direct URL failed:', streamError.message);
+                                    throw streamError;
+                                }
+                            } else {
+                                throw new Error('No direct URL returned from youtube-dl-exec');
+                            }
+                            
+                        } catch (execError) {
+                            console.log('DEBUG: Pre-buffer youtube-dl-exec fallback failed:', execError.message);
+                            
+                            // Last resort: try ytdl-core with error suppression
+                            try {
+                                console.log('DEBUG: Pre-buffer trying ytdl-core as last resort');
+                                
+                                const ytdlStream = ytdl(song.url, {
+                                    filter: 'audioonly',
+                                    quality: 'highestaudio',
+                                    highWaterMark: 1 << 25,
+                                    dlChunkSize: 0,
+                                    requestOptions: {
+                                        headers: {
+                                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                                        }
+                                    }
+                                });
+                                
+                                // Add error handler to suppress signature extraction errors
+                                ytdlStream.on('error', (error) => {
+                                    if (error.message.includes('Could not extract functions')) {
+                                        console.log('DEBUG: Pre-buffer suppressing ytdl-core signature error');
+                                    }
+                                });
+                                
+                                stream = ytdlStream;
+                                console.log('DEBUG: Pre-buffer ytdl-core last resort successful');
+                                
+                            } catch (finalError) {
+                                console.log('DEBUG: Pre-buffer all methods failed:', finalError.message);
+                                return; // Skip pre-buffering if all methods fail
                             }
                         }
                     }
@@ -603,41 +602,16 @@ class MusicQueue {
                         } catch (searchError) {
                             console.log('DEBUG: PlaySong search approach failed:', searchError.message);
                             
-                            // Robust fallback using yt-dlp-wrap
+                            // Enhanced fallback using youtube-dl-exec
                             try {
-                                console.log('DEBUG: PlaySong trying yt-dlp-wrap fallback');
+                                console.log('DEBUG: PlaySong trying youtube-dl-exec fallback');
                                 
-                                // Use yt-dlp-wrap to get a reliable stream
-                                const ytdlp = new YtdlpWrap();
-                                const audioStream = await ytdlp.execStream([
-                                    song.url,
-                                    '--format', 'bestaudio[ext=webm]/bestaudio/best',
-                                    '--no-playlist',
-                                    '--no-warnings',
-                                    '--no-call-home',
-                                    '--no-check-certificate',
-                                    '--prefer-free-formats',
-                                    '--youtube-skip-dash-manifest',
-                                    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                                ]);
+                                // Try different approaches with youtube-dl-exec
+                                let directUrl = null;
                                 
-                                if (audioStream) {
-                                    stream = audioStream;
-                                    streamSuccess = true;
-                                    console.log('DEBUG: PlaySong yt-dlp-wrap fallback successful');
-                                } else {
-                                    throw new Error('No stream returned from yt-dlp-wrap');
-                                }
-                                
-                            } catch (ytdlpError) {
-                                console.log('DEBUG: PlaySong yt-dlp-wrap fallback failed:', ytdlpError.message);
-                                
-                                // Try youtube-dl-exec as next fallback
+                                // Method 1: Get direct URL
                                 try {
-                                    console.log('DEBUG: PlaySong trying youtube-dl-exec fallback');
-                                    
-                                    // Use youtube-dl-exec to get direct URL
-                                    const result = await youtubedl(song.url, {
+                                    directUrl = await youtubedl(song.url, {
                                         format: 'bestaudio[ext=webm]/bestaudio/best',
                                         getUrl: true,
                                         noWarnings: true,
@@ -647,55 +621,97 @@ class MusicQueue {
                                         youtubeSkipDashManifest: true,
                                         referer: song.url
                                     });
-                                    
-                                    if (result && typeof result === 'string') {
-                                        // Use the direct URL with play-dl
-                                        stream = await playdl.stream(result, { 
+                                } catch (urlError) {
+                                    console.log('DEBUG: youtube-dl-exec direct URL failed:', urlError.message);
+                                }
+                                
+                                // Method 2: Try different format if first fails
+                                if (!directUrl) {
+                                    try {
+                                        directUrl = await youtubedl(song.url, {
+                                            format: 'bestaudio/best',
+                                            getUrl: true,
+                                            noWarnings: true,
+                                            noCallHome: true,
+                                            noCheckCertificate: true
+                                        });
+                                    } catch (altError) {
+                                        console.log('DEBUG: youtube-dl-exec alternative format failed:', altError.message);
+                                    }
+                                }
+                                
+                                // Method 3: Try with search if URL fails
+                                if (!directUrl) {
+                                    try {
+                                        const searchResults = await youtubedl(`ytsearch:${song.title} ${song.artist || ''}`, {
+                                            format: 'bestaudio[ext=webm]/bestaudio/best',
+                                            getUrl: true,
+                                            noWarnings: true,
+                                            noCallHome: true,
+                                            noCheckCertificate: true,
+                                            limit: 1
+                                        });
+                                        
+                                        if (searchResults && typeof searchResults === 'string') {
+                                            directUrl = searchResults;
+                                        }
+                                    } catch (searchError) {
+                                        console.log('DEBUG: youtube-dl-exec search failed:', searchError.message);
+                                    }
+                                }
+                                
+                                if (directUrl && typeof directUrl === 'string') {
+                                    // Use the direct URL with play-dl
+                                    try {
+                                        stream = await playdl.stream(directUrl, { 
                                             quality: 2,
                                             discordPlayerCompatibility: true 
                                         });
                                         streamSuccess = true;
                                         console.log('DEBUG: PlaySong youtube-dl-exec fallback successful');
-                                    } else {
-                                        throw new Error('No direct URL returned from youtube-dl-exec');
+                                    } catch (streamError) {
+                                        console.log('DEBUG: play-dl stream with direct URL failed:', streamError.message);
+                                        throw streamError;
                                     }
+                                } else {
+                                    throw new Error('No direct URL returned from youtube-dl-exec');
+                                }
+                                
+                            } catch (execError) {
+                                console.log('DEBUG: PlaySong youtube-dl-exec fallback failed:', execError.message);
+                                
+                                // Last resort: try ytdl-core with error handling
+                                try {
+                                    console.log('DEBUG: PlaySong trying ytdl-core as last resort');
                                     
-                                } catch (execError) {
-                                    console.log('DEBUG: PlaySong youtube-dl-exec fallback failed:', execError.message);
+                                    // Create ytdl-core stream with error suppression
+                                    const ytdlStream = ytdl(song.url, {
+                                        filter: 'audioonly',
+                                        quality: 'highestaudio',
+                                        highWaterMark: 1 << 25,
+                                        dlChunkSize: 0,
+                                        requestOptions: {
+                                            headers: {
+                                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                                            }
+                                        }
+                                    });
                                     
-                                    // Last resort: try ytdl-core with error handling
-                                    try {
-                                        console.log('DEBUG: PlaySong trying ytdl-core as last resort');
-                                        
-                                        // Create ytdl-core stream with error suppression
-                                        const ytdlStream = ytdl(song.url, {
-                                            filter: 'audioonly',
-                                            quality: 'highestaudio',
-                                            highWaterMark: 1 << 25,
-                                            dlChunkSize: 0,
-                                            requestOptions: {
-                                                headers: {
-                                                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                                                }
-                                            }
-                                        });
-                                        
-                                        // Add error handler to suppress signature extraction errors
-                                        ytdlStream.on('error', (error) => {
-                                            if (error.message.includes('Could not extract functions')) {
-                                                console.log('DEBUG: Suppressing ytdl-core signature error');
-                                            } else {
-                                                console.error('ytdl-core stream error:', error);
-                                            }
-                                        });
-                                        
-                                        stream = ytdlStream;
-                                        streamSuccess = true;
-                                        console.log('DEBUG: PlaySong ytdl-core last resort successful');
-                                        
-                                    } catch (finalError) {
-                                        console.log('DEBUG: PlaySong all methods failed:', finalError.message);
-                                    }
+                                    // Add error handler to suppress signature extraction errors
+                                    ytdlStream.on('error', (error) => {
+                                        if (error.message.includes('Could not extract functions')) {
+                                            console.log('DEBUG: Suppressing ytdl-core signature error');
+                                        } else {
+                                            console.error('ytdl-core stream error:', error);
+                                        }
+                                    });
+                                    
+                                    stream = ytdlStream;
+                                    streamSuccess = true;
+                                    console.log('DEBUG: PlaySong ytdl-core last resort successful');
+                                    
+                                } catch (finalError) {
+                                    console.log('DEBUG: PlaySong all methods failed:', finalError.message);
                                 }
                             }
                         }
