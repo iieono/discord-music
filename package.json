@@ -16,7 +16,8 @@
     "opusscript": "^0.0.8",
     "play-dl": "^1.9.7",
     "spotify-url-info": "^3.2.15",
-    "ytdl-core": "^4.11.5"
+    "ytdl-core": "^4.11.5",
+    "youtube-dl-exec": "^2.4.13"
   },
   "engines": {
     "node": ">=16.0.0"

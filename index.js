@@ -1,6 +1,8 @@
 const { Client, GatewayIntentBits, Partials, Collection, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ComponentType, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, getVoiceConnection } = require('@discordjs/voice');
 const playdl = require('play-dl');
+const ytdl = require('ytdl-core');
+const youtubedl = require('youtube-dl-exec');
 const { getPreview } = require('spotify-url-info');
 const fs = require('fs');
 const config = require('./config.json');
@@ -297,9 +299,34 @@ class MusicQueue {
                         console.log('DEBUG: Pre-buffer stream successful with direct URL');
                     } catch (streamError) {
                         console.log('DEBUG: Pre-buffer direct stream failed, trying fallback:', streamError.message);
-                        // Fallback: try original URL
-                        stream = await playdl.stream(song.url, { quality: 2 });
-                        console.log('DEBUG: Pre-buffer fallback stream successful');
+                        
+                        // Try ytdl-core as fallback
+                        try {
+                            console.log('DEBUG: Pre-buffer trying ytdl-core fallback');
+                            stream = ytdl(song.url, {
+                                quality: 'highestaudio',
+                                filter: 'audioonly',
+                                highWaterMark: 1 << 25,
+                                dlChunkSize: 0,
+                                requestOptions: {
+                                    headers: {
+                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                                    }
+                                }
+                            });
+                            console.log('DEBUG: Pre-buffer ytdl-core fallback successful');
+                        } catch (ytdlError) {
+                            console.log('DEBUG: Pre-buffer ytdl-core fallback failed, trying original URL:', ytdlError.message);
+                            
+                            // Last resort: try original URL with play-dl
+                            try {
+                                stream = await playdl.stream(song.url, { quality: 2 });
+                                console.log('DEBUG: Pre-buffer play-dl original URL successful');
+                            } catch (finalError) {
+                                console.log('DEBUG: Pre-buffer all methods failed:', finalError.message);
+                                return; // Skip pre-buffering if all methods fail
+                            }
+                        }
                     }
                 } catch (error) {
                     console.error('YouTube pre-buffer error:', error);
@@ -309,7 +336,19 @@ class MusicQueue {
             }
 
             // Pre-create audio resource for instant playback
-            const resource = createAudioResource(stream.stream, { 
+            let streamToUse;
+            if (typeof stream.pipe === 'function') {
+                // ytdl-core stream
+                streamToUse = stream;
+            } else if (stream.stream) {
+                // play-dl stream
+                streamToUse = stream.stream;
+            } else {
+                console.log('DEBUG: Pre-buffer invalid stream format');
+                return;
+            }
+            
+            const resource = createAudioResource(streamToUse, { 
                 inlineVolume: true,
                 metadata: {
                     title: song.title,
@@ -430,50 +469,149 @@ class MusicQueue {
                         throw new Error('Unable to get video info');
                     }
                     
-                    // Use ytdl-core as primary method (more reliable)
+                    // Use play-dl with proper approach
+                    let streamSuccess = false;
+                    
                     try {
-                        console.log('DEBUG: PlaySong using ytdl-core as primary method');
-                        const ytdl = require('ytdl-core');
-                        const ytdlStream = ytdl(song.url, { 
-                            quality: 'highestaudio', 
-                            filter: 'audioonly',
-                            highWaterMark: 1 << 25 
-                        });
-                        stream = { stream: ytdlStream, type: 'ytdl-core' };
-                        console.log('DEBUG: PlaySong ytdl-core successful');
-                    } catch (ytdlError) {
-                        console.log('DEBUG: PlaySong ytdl-core failed, trying play-dl fallback:', ytdlError.message);
+                        // Try to use play-dl's stream method with video_info first
+                        console.log('DEBUG: PlaySong trying play-dl with video_info approach');
+                        const videoInfo = await playdl.video_info(song.url);
                         
-                        // Fallback: try play-dl with different approaches
-                        let streamSuccess = false;
-                        
-                        // Extract video ID for alternative approaches
-                        const videoId = song.url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/)?.[1];
-                        console.log('DEBUG: Extracted video ID:', videoId);
-                        
-                        // Try play-dl with different options
-                        const streamOptions = [
-                            { quality: 2, discordPlayerCompatibility: true },
-                            { quality: 0, discordPlayerCompatibility: true },
-                            { quality: 2 },
-                            { quality: 0 }
-                        ];
-                        
-                        for (const options of streamOptions) {
-                            try {
-                                console.log('DEBUG: PlaySong trying play-dl stream with options:', options);
-                                stream = await playdl.stream(streamUrl, options);
-                                console.log('DEBUG: PlaySong play-dl stream successful with options:', options);
-                                streamSuccess = true;
-                                break;
-                            } catch (error) {
-                                console.log('DEBUG: PlaySong play-dl stream failed with options:', options, 'Error:', error.message);
+                        if (videoInfo && videoInfo.video_details) {
+                            // Try different streaming formats
+                            const formats = videoInfo.format;
+                            let bestFormat = null;
+                            
+                            // Find the best audio format
+                            for (const format of formats) {
+                                if (format.mimeType?.includes('audio')) {
+                                    bestFormat = format;
+                                    break;
+                                }
+                            }
+                            
+                            if (bestFormat) {
+                                try {
+                                    console.log('DEBUG: PlaySong using best audio format:', bestFormat.mimeType);
+                                    stream = await playdl.stream(bestFormat.url, { 
+                                        quality: bestFormat.quality,
+                                        discordPlayerCompatibility: true 
+                                    });
+                                    streamSuccess = true;
+                                    console.log('DEBUG: PlaySong play-dl with best format successful');
+                                } catch (formatError) {
+                                    console.log('DEBUG: PlaySong best format failed, trying direct stream:', formatError.message);
+                                }
                             }
                         }
                         
+                        // Fallback to basic stream
                         if (!streamSuccess) {
-                            throw new Error('Both ytdl-core and play-dl failed');
+                            console.log('DEBUG: PlaySong trying basic play-dl stream');
+                            stream = await playdl.stream(song.url, { 
+                                quality: 2, 
+                                discordPlayerCompatibility: true 
+                            });
+                            streamSuccess = true;
+                            console.log('DEBUG: PlaySong basic play-dl stream successful');
                         }
+                        
+                    } catch (error) {
+                        console.error('Play-dl approach failed:', error);
+                        
+                        // Try alternative approach: search and stream
+                        try {
+                            console.log('DEBUG: PlaySong trying search approach');
+                            const searchQuery = song.title;
+                            const searchResults = await playdl.search(searchQuery, { limit: 1, source: 'youtube' });
+                            
+                            if (searchResults.length > 0) {
+                                console.log('DEBUG: PlaySong found alternative video:', searchResults[0].title);
+                                stream = await playdl.stream(searchResults[0].url, { 
+                                    quality: 2, 
+                                    discordPlayerCompatibility: true 
+                                });
+                                streamSuccess = true;
+                                console.log('DEBUG: PlaySong search approach successful');
+                            }
+                        } catch (searchError) {
+                            console.log('DEBUG: PlaySong search approach failed:', searchError.message);
+                            
+                            // Final fallback: try ytdl-core with signature workaround
+                            try {
+                                console.log('DEBUG: PlaySong trying ytdl-core fallback');
+                                
+                                // Try ytdl-core with different options
+                                const ytdlOptions = {
+                                    quality: 'highestaudio',
+                                    filter: 'audioonly',
+                                    highWaterMark: 1 << 25, // 32MB buffer
+                                    liveBuffer: 4000,
+                                    dlChunkSize: 0, // Disable chunking for better compatibility
+                                    requestOptions: {
+                                        headers: {
+                                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                                        }
+                                    }
+                                };
+                                
+                                stream = ytdl(song.url, ytdlOptions);
+                                streamSuccess = true;
+                                console.log('DEBUG: PlaySong ytdl-core fallback successful');
+                                
+                            } catch (ytdlError) {
+                                console.log('DEBUG: PlaySong ytdl-core fallback failed:', ytdlError.message);
+                                
+                                // Last resort: try with different ytdl-core options
+                                try {
+                                    console.log('DEBUG: PlaySong trying ytdl-core with basic options');
+                                    stream = ytdl(song.url, {
+                                        filter: 'audioonly',
+                                        quality: 'highestaudio'
+                                    });
+                                    streamSuccess = true;
+                                    console.log('DEBUG: PlaySong ytdl-core basic options successful');
+                                } catch (finalError) {
+                                    console.log('DEBUG: PlaySong all methods failed:', finalError.message);
+                                    
+                                    // Ultimate fallback: youtube-dl-exec
+                                    try {
+                                        console.log('DEBUG: PlaySong trying youtube-dl-exec fallback');
+                                        
+                                        // Use youtube-dl-exec to get direct URL
+                                        const result = await youtubedl(song.url, {
+                                            format: 'bestaudio[ext=webm]/bestaudio/best',
+                                            getUrl: true,
+                                            noWarnings: true,
+                                            noCallHome: true,
+                                            noCheckCertificate: true,
+                                            preferFreeFormats: true,
+                                            youtubeSkipDashManifest: true,
+                                            referer: song.url
+                                        });
+                                        
+                                        if (result && typeof result === 'string') {
+                                            // Use the direct URL with play-dl
+                                            stream = await playdl.stream(result, { 
+                                                quality: 2,
+                                                discordPlayerCompatibility: true 
+                                            });
+                                            streamSuccess = true;
+                                            console.log('DEBUG: PlaySong youtube-dl-exec fallback successful');
+                                        } else {
+                                            throw new Error('No direct URL returned from youtube-dl-exec');
+                                        }
+                                        
+                                    } catch (ultimateError) {
+                                        console.log('DEBUG: PlaySong youtube-dl-exec fallback failed:', ultimateError.message);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (!streamSuccess) {
+                        throw new Error('All streaming methods failed');
                     }
                 } catch (error) {
                     console.error('YouTube stream error:', error);
@@ -483,10 +621,39 @@ class MusicQueue {
             }
 
             // Handle different stream formats
-            const streamToUse = stream.type === 'ytdl-core' ? stream.stream : stream.stream;
+            let streamToUse;
+            if (stream && typeof stream.pipe === 'function') {
+                // ytdl-core stream
+                streamToUse = stream;
+            } else if (stream && stream.stream) {
+                // play-dl stream
+                streamToUse = stream.stream;
+            } else {
+                throw new Error('Invalid stream format');
+            }
+            
             resource = createAudioResource(streamToUse, { 
-                inlineVolume: true 
+                inlineVolume: true,
+                inputType: streamToUse.type || 'unknown'
             });
+            
+            // Validate the created resource
+            if (!resource || !resource.readable) {
+                throw new Error('Failed to create valid audio resource');
+            }
+            
+            console.log('DEBUG: Audio resource created successfully for:', song.title);
+            
+            // Add stream event handlers for debugging
+            if (streamToUse) {
+                streamToUse.on('error', (error) => {
+                    console.error('Stream error for', song.title + ':', error);
+                });
+                
+                streamToUse.on('end', () => {
+                    console.log('DEBUG: Stream ended for:', song.title);
+                });
+            }
             
             this.applyEqualizer(resource);
         }
@@ -623,7 +790,16 @@ class MusicQueue {
             
             this.player.on('error', (error) => {
                 console.error('Audio player error:', error);
-                this.playNext();
+                console.error('Error details:', {
+                    message: error.message,
+                    stack: error.stack,
+                    resource: error.resource ? 'Resource info available' : 'No resource info'
+                });
+                
+                // Try to recover by playing next song
+                setTimeout(() => {
+                    this.playNext();
+                }, 1000);
             });
             
             this.reconnectAttempts = 0;
