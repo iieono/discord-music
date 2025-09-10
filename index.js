@@ -328,7 +328,7 @@ class MusicQueue {
             console.log(`✅ Instant playback: ${song.title}`);
             
             // Track cache hit
-            this.updateStats('cacheHits', 1);
+            this.updateStat('cacheHits', 1);
             
             // Remove from cache since we're using it
             this.audioResources.delete(cacheKey);
@@ -346,9 +346,27 @@ class MusicQueue {
                 }
                 stream = await playdl.stream(searchResults[0].url, { quality: 2 });
             } else if (song.source === 'soundcloud') {
+                if (!song.url || !song.url.startsWith('http')) {
+                    throw new Error('Invalid SoundCloud URL');
+                }
                 stream = await playdl.stream(song.url, { quality: 2 });
             } else {
-                stream = await playdl.stream(song.url, { quality: 2 });
+                // YouTube source
+                if (!song.url || !song.url.startsWith('http')) {
+                    throw new Error('Invalid YouTube URL');
+                }
+                
+                try {
+                    // Validate URL by getting video info first
+                    const videoInfo = await playdl.video_info(song.url);
+                    if (!videoInfo || !videoInfo.video_details) {
+                        throw new Error('Unable to get video info');
+                    }
+                    stream = await playdl.stream(song.url, { quality: 2 });
+                } catch (error) {
+                    console.error('YouTube stream error:', error);
+                    throw new Error(`Failed to stream YouTube video: ${error.message}`);
+                }
             }
 
             resource = createAudioResource(stream.stream, { 
@@ -367,7 +385,7 @@ class MusicQueue {
         song.plays++;
         
         // Track total plays for cache hit rate
-        this.updateStats('totalPlays', 1);
+        this.updateStat('totalPlays', 1);
         
         // Start predictive loading after a short delay
         setTimeout(() => {
@@ -566,7 +584,7 @@ class MusicQueue {
             }
         }
         
-        this.updateStats('songsAdded', 1);
+        this.updateStat('songsAdded', 1);
         
         return track;
     }
@@ -972,7 +990,7 @@ class MusicQueue {
     }
 }
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
     console.log(`Logged in as ${client.user.tag}!`);
     
     client.user.setPresence({
