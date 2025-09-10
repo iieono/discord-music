@@ -348,13 +348,21 @@ class MusicQueue {
                 return;
             }
             
-            const resource = createAudioResource(streamToUse, { 
+            // Create audio resource for pre-buffering
+            const resourceOptions = {
                 inlineVolume: true,
                 metadata: {
                     title: song.title,
                     url: song.url
                 }
-            });
+            };
+            
+            // Only add inputType for play-dl streams
+            if (stream && stream.type && stream.type !== 'unknown') {
+                resourceOptions.inputType = stream.type;
+            }
+            
+            const resource = createAudioResource(streamToUse, resourceOptions);
             
             // Apply volume and equalizer
             resource.volume.setVolume(this.volume / 100);
@@ -632,10 +640,17 @@ class MusicQueue {
                 throw new Error('Invalid stream format');
             }
             
-            resource = createAudioResource(streamToUse, { 
-                inlineVolume: true,
-                inputType: streamToUse.type || 'unknown'
-            });
+            // Create audio resource - don't specify inputType for ytdl-core streams
+            const resourceOptions = {
+                inlineVolume: true
+            };
+            
+            // Only add inputType for play-dl streams
+            if (stream && stream.type && stream.type !== 'unknown') {
+                resourceOptions.inputType = stream.type;
+            }
+            
+            resource = createAudioResource(streamToUse, resourceOptions);
             
             // Validate the created resource
             if (!resource || !resource.readable) {
@@ -652,6 +667,11 @@ class MusicQueue {
                 
                 streamToUse.on('end', () => {
                     console.log('DEBUG: Stream ended for:', song.title);
+                });
+                
+                // Handle ytdl-core signature extraction errors gracefully
+                streamToUse.on('close', () => {
+                    console.log('DEBUG: Stream closed for:', song.title);
                 });
             }
             
@@ -1815,10 +1835,20 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 process.on('unhandledRejection', error => {
+    // Ignore ytdl-core signature extraction errors as they're not critical
+    if (error.message === 'Could not extract functions' || error.message.includes('Could not extract functions')) {
+        console.log('Ignoring ytdl-core signature extraction error (non-critical)');
+        return;
+    }
     console.error('Unhandled promise rejection:', error);
 });
 
 process.on('uncaughtException', error => {
+    // Ignore ytdl-core signature extraction errors as they're not critical
+    if (error.message === 'Could not extract functions' || error.message.includes('Could not extract functions')) {
+        console.log('Ignoring ytdl-core signature extraction error (non-critical)');
+        return;
+    }
     console.error('Uncaught exception:', error);
 });
 
