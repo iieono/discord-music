@@ -242,6 +242,12 @@ class MusicQueue {
 
     // Instant Playback: Pre-buffer audio for instant playback
     async preBufferSong(song) {
+        // Validate song URL first
+        if (!song || !song.url || !song.url.startsWith('http')) {
+            console.error('Invalid song URL for pre-buffering:', song?.url);
+            return;
+        }
+        
         const cacheKey = `${song.url}-${this.equalizer}`;
         
         // Skip if already cached
@@ -259,8 +265,20 @@ class MusicQueue {
                 const searchResults = await playdl.search(searchQuery, { limit: 1, source: 'youtube' });
                 if (searchResults.length === 0) return;
                 stream = await playdl.stream(searchResults[0].url, { quality: 2 });
-            } else {
+            } else if (song.source === 'soundcloud') {
                 stream = await playdl.stream(song.url, { quality: 2 });
+            } else {
+                // YouTube source - validate URL first
+                try {
+                    const videoInfo = await playdl.video_info(song.url);
+                    if (!videoInfo || !videoInfo.video_details) {
+                        throw new Error('Unable to get video info');
+                    }
+                    stream = await playdl.stream(song.url, { quality: 2 });
+                } catch (error) {
+                    console.error('YouTube pre-buffer error:', error);
+                    return; // Don't throw, just skip pre-buffering
+                }
             }
 
             // Pre-create audio resource for instant playback
@@ -316,6 +334,12 @@ class MusicQueue {
 
     // Instant Playback: Enhanced playSong with pre-buffering
     async playSong(song) {
+        // Validate song object and URL
+        if (!song || !song.url || !song.url.startsWith('http')) {
+            console.error('Invalid song object or URL:', song);
+            throw new Error('Invalid song URL');
+        }
+        
         const cacheKey = `${song.url}-${this.equalizer}`;
         
         // Check if we have a pre-buffered resource
@@ -555,6 +579,12 @@ class MusicQueue {
     }
 
     async addSong(song, user) {
+        // Validate song has required fields
+        if (!song || !song.title || !song.url || !song.url.startsWith('http')) {
+            console.error('Invalid song data:', song);
+            throw new Error('Invalid song data: missing title or URL');
+        }
+        
         const track = {
             title: song.title,
             url: song.url,
@@ -1202,11 +1232,18 @@ client.on('interactionCreate', async (interaction) => {
                 }
                 
                 const video = searchResults[0];
+                
+                // Validate video object has required fields
+                if (!video || !video.title || !video.url) {
+                    console.error('Invalid video object from search:', video);
+                    return interaction.editReply('Error: Invalid video data received from search!');
+                }
+                
                 const song = {
                     title: video.title,
                     duration: video.durationRaw,
                     durationMs: video.durationInSec * 1000,
-                    thumbnail: video.thumbnails[0].url,
+                    thumbnail: video.thumbnails && video.thumbnails[0] ? video.thumbnails[0].url : '',
                     url: video.url,
                     source: 'youtube'
                 };
