@@ -430,15 +430,63 @@ class MusicQueue {
                         throw new Error('Unable to get video info');
                     }
                     
-                    // Try to stream with the direct URL
-                    try {
-                        stream = await playdl.stream(streamUrl, { quality: 2 });
-                        console.log('DEBUG: PlaySong stream successful with direct URL');
-                    } catch (streamError) {
-                        console.log('DEBUG: PlaySong direct stream failed, trying fallback:', streamError.message);
-                        // Fallback: try original URL
-                        stream = await playdl.stream(song.url, { quality: 2 });
-                        console.log('DEBUG: PlaySong fallback stream successful');
+                    // Try multiple streaming approaches
+                    let streamSuccess = false;
+                    
+                    // Extract video ID for alternative approaches
+                    const videoId = song.url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/)?.[1];
+                    console.log('DEBUG: Extracted video ID:', videoId);
+                    
+                    // Approach 1: Use stream with different options on stream_url
+                    const streamOptions = [
+                        { quality: 2, discordPlayerCompatibility: true },
+                        { quality: 0, discordPlayerCompatibility: true },
+                        { quality: 2 },
+                        { quality: 0 }
+                    ];
+                    
+                    for (const options of streamOptions) {
+                        try {
+                            console.log('DEBUG: PlaySong trying stream with options:', options);
+                            stream = await playdl.stream(streamUrl, options);
+                            console.log('DEBUG: PlaySong stream successful with options:', options);
+                            streamSuccess = true;
+                            break;
+                        } catch (error) {
+                            console.log('DEBUG: PlaySong stream failed with options:', options, 'Error:', error.message);
+                        }
+                    }
+                    
+                    // Approach 2: Try using play-dl's stream with video ID
+                    if (!streamSuccess && videoId) {
+                        try {
+                            console.log('DEBUG: PlaySong trying stream with video ID');
+                            const searchResults = await playdl.search(`https://youtu.be/${videoId}`, { limit: 1 });
+                            if (searchResults.length > 0) {
+                                stream = await playdl.stream(searchResults[0].url, { quality: 2 });
+                                console.log('DEBUG: PlaySong video ID search successful');
+                                streamSuccess = true;
+                            }
+                        } catch (error) {
+                            console.log('DEBUG: PlaySong video ID search failed:', error.message);
+                        }
+                    }
+                    
+                    // Approach 3: Try using ytdl-core as fallback
+                    if (!streamSuccess) {
+                        try {
+                            console.log('DEBUG: PlaySong trying ytdl-core fallback');
+                            const ytdl = require('ytdl-core');
+                            stream = { stream: ytdl(song.url, { quality: 'highestaudio', filter: 'audioonly' }) };
+                            console.log('DEBUG: PlaySong ytdl-core fallback successful');
+                            streamSuccess = true;
+                        } catch (error) {
+                            console.log('DEBUG: PlaySong ytdl-core fallback failed:', error.message);
+                        }
+                    }
+                    
+                    if (!streamSuccess) {
+                        throw new Error('All streaming methods failed');
                     }
                 } catch (error) {
                     console.error('YouTube stream error:', error);
