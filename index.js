@@ -279,13 +279,31 @@ class MusicQueue {
             } else {
                 // YouTube source - validate URL first
                 try {
+                    let streamUrl = song.url;
+                    
+                    console.log('DEBUG: Pre-buffer attempting to get video_info for URL:', song.url);
                     const videoInfo = await playdl.video_info(song.url);
-                    if (!videoInfo || !videoInfo.video_details) {
+                    
+                    if (videoInfo && videoInfo.video_details) {
+                        streamUrl = videoInfo.video_details.url;
+                        console.log('DEBUG: Pre-buffer video_info successful, stream URL:', streamUrl);
+                    } else {
                         throw new Error('Unable to get video info');
                     }
-                    stream = await playdl.stream(song.url, { quality: 2 });
+                    
+                    // Try to stream with the direct URL
+                    try {
+                        stream = await playdl.stream(streamUrl, { quality: 2 });
+                        console.log('DEBUG: Pre-buffer stream successful with direct URL');
+                    } catch (streamError) {
+                        console.log('DEBUG: Pre-buffer direct stream failed, trying fallback:', streamError.message);
+                        // Fallback: try original URL
+                        stream = await playdl.stream(song.url, { quality: 2 });
+                        console.log('DEBUG: Pre-buffer fallback stream successful');
+                    }
                 } catch (error) {
                     console.error('YouTube pre-buffer error:', error);
+                    console.log('DEBUG: Pre-buffer failed for URL:', song.url);
                     return; // Don't throw, just skip pre-buffering
                 }
             }
@@ -399,14 +417,32 @@ class MusicQueue {
                 }
                 
                 try {
-                    // Validate URL by getting video info first
+                    // Try multiple approaches to get a working stream
+                    let streamUrl = song.url;
+                    
+                    console.log('DEBUG: PlaySong attempting to get video_info for URL:', song.url);
                     const videoInfo = await playdl.video_info(song.url);
-                    if (!videoInfo || !videoInfo.video_details) {
+                    
+                    if (videoInfo && videoInfo.video_details) {
+                        streamUrl = videoInfo.video_details.url;
+                        console.log('DEBUG: PlaySong video_info successful, stream URL:', streamUrl);
+                    } else {
                         throw new Error('Unable to get video info');
                     }
-                    stream = await playdl.stream(song.url, { quality: 2 });
+                    
+                    // Try to stream with the direct URL
+                    try {
+                        stream = await playdl.stream(streamUrl, { quality: 2 });
+                        console.log('DEBUG: PlaySong stream successful with direct URL');
+                    } catch (streamError) {
+                        console.log('DEBUG: PlaySong direct stream failed, trying fallback:', streamError.message);
+                        // Fallback: try original URL
+                        stream = await playdl.stream(song.url, { quality: 2 });
+                        console.log('DEBUG: PlaySong fallback stream successful');
+                    }
                 } catch (error) {
                     console.error('YouTube stream error:', error);
+                    console.log('DEBUG: PlaySong failed for URL:', song.url);
                     throw new Error(`Failed to stream YouTube video: ${error.message}`);
                 }
             }
@@ -636,19 +672,13 @@ class MusicQueue {
         
         this.songs.push(track);
         
-        // Instant Playback: Start pre-buffering immediately
+        // Temporarily disable pre-buffering to test main playback
         if (this.songs.length === 1 && !this.playing) {
-            // First song - start pre-buffering right away
-            this.preBufferSong(track).catch(console.error);
-            setTimeout(() => this.playNext(), 100); // Small delay for pre-buffering
+            // First song - play immediately without pre-buffering
+            setTimeout(() => this.playNext(), 100);
         } else if (this.songs.length >= 2) {
-            // Additional songs - start predictive loading
-            this.preBufferSong(track).catch(console.error);
-            
-            // If we have enough songs, start predictive loading
-            if (this.songs.length >= 3) {
-                setTimeout(() => this.predictiveLoad(), 500);
-            }
+            // Additional songs - no pre-buffering for now
+            console.log('DEBUG: Skipping pre-buffering for now');
         }
         
         this.updateStat('songsAdded', 1);
