@@ -242,6 +242,15 @@ class MusicQueue {
 
     // Instant Playback: Pre-buffer audio for instant playback
     async preBufferSong(song) {
+        // Debug: Log song object
+        console.log('DEBUG: preBufferSong called with song:', {
+            title: song?.title,
+            url: song?.url,
+            source: song?.source,
+            hasUrl: !!song?.url,
+            urlType: typeof song?.url
+        });
+        
         // Validate song URL first
         if (!song || !song.url || !song.url.startsWith('http')) {
             console.error('Invalid song URL for pre-buffering:', song?.url);
@@ -334,6 +343,15 @@ class MusicQueue {
 
     // Instant Playback: Enhanced playSong with pre-buffering
     async playSong(song) {
+        // Debug: Log song object
+        console.log('DEBUG: playSong called with song:', {
+            title: song?.title,
+            url: song?.url,
+            source: song?.source,
+            hasUrl: !!song?.url,
+            urlType: typeof song?.url
+        });
+        
         // Validate song object and URL
         if (!song || !song.url || !song.url.startsWith('http')) {
             console.error('Invalid song object or URL:', song);
@@ -579,6 +597,16 @@ class MusicQueue {
     }
 
     async addSong(song, user) {
+        // Debug: Log song object
+        console.log('DEBUG: addSong called with song:', {
+            title: song?.title,
+            url: song?.url,
+            source: song?.source,
+            hasUrl: !!song?.url,
+            urlType: typeof song?.url,
+            fullSong: song
+        });
+        
         // Validate song has required fields
         if (!song || !song.title || !song.url || !song.url.startsWith('http')) {
             console.error('Invalid song data:', song);
@@ -596,6 +624,15 @@ class MusicQueue {
             artist: song.artist || '',
             plays: 0
         };
+        
+        console.log('DEBUG: Created track object:', {
+            trackTitle: track.title,
+            trackUrl: track.url,
+            trackSource: track.source,
+            hasTrackUrl: !!track.url,
+            trackUrlType: typeof track.url,
+            trackObject: track
+        });
         
         this.songs.push(track);
         
@@ -649,6 +686,16 @@ class MusicQueue {
                 this.songs.push(song);
             }
         }
+
+        console.log('DEBUG: playNext selected song:', {
+            songTitle: song?.title,
+            songUrl: song?.url,
+            songSource: song?.source,
+            hasSongUrl: !!song?.url,
+            songUrlType: typeof song?.url,
+            songObject: song,
+            songsArrayLength: this.songs.length
+        });
 
         try {
             await this.playSong(song);
@@ -1247,6 +1294,14 @@ client.on('interactionCreate', async (interaction) => {
                     url: video.url,
                     source: 'youtube'
                 };
+                
+                console.log('DEBUG: Created song from video:', {
+                    videoTitle: video.title,
+                    videoUrl: video.url,
+                    songTitle: song.title,
+                    songUrl: song.url,
+                    videoObject: video
+                });
                 
                 await queue.addSong(song, member);
                 await interaction.editReply(`🎵 Added **${song.title}** to the queue!`);
